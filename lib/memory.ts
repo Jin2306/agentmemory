@@ -1,7 +1,14 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  canonicalCategory,
+  evaluateConflict,
+  looksLikeDuplicate,
+} from "./memoryGuardian";
 import type {
   AgentName,
+  GuardianRecord,
+  GuardianVerdict,
   MemoryActivity,
   MemoryEntry,
   MemoryStats,
@@ -30,6 +37,7 @@ export function createEmptyMemory(
     openQuestions: [],
     conflicts: [],
     activityLog: [],
+    guardianHistory: [],
   };
 }
 
@@ -40,6 +48,8 @@ export function createStats(): MemoryStats {
     newEntries: 0,
     duplicatesRejected: 0,
     conflictsDetected: 0,
+    conflictsResolved: 0,
+    conflictsFlagged: 0,
   };
 }
 
@@ -61,7 +71,7 @@ function now(): string {
 
 function makeEntry(
   content: string,
-  source: AgentName | "Memory Manager",
+  source: AgentName | "Memory Manager" | "Memory Guardian",
   extra?: { category?: string; value?: string; status?: MemoryEntry["status"] },
 ): MemoryEntry {
   return {
@@ -159,7 +169,7 @@ export class MemoryManager {
     return JSON.stringify(snapshot, null, 2);
   }
 
-  updateMemory(agentName: AgentName, updates: MemoryUpdates): void {
+  async updateMemory(agentName: AgentName, updates: MemoryUpdates): Promise<void> {
     const added: string[] = [];
 
     const appendList = (
@@ -207,7 +217,7 @@ export class MemoryManager {
     appendList("completedTasks", updates.completedTasks, "completed tasks");
 
     if (updates.technicalDecisions?.length) {
-      const { addedCount, conflictCount } = this.mergeDecisions(
+      const { addedCount, conflictCount } = await this.mergeDecisions(
         agentName,
         updates.technicalDecisions,
       );
@@ -227,7 +237,7 @@ export class MemoryManager {
     );
   }
 
-  mergeDecisions(agentName: AgentName, decisions: TechDecision[]) {
+  async mergeDecisions(agentName: AgentName, decisions: TechDecision[]) {
     let addedCount = 0;
     let conflictCount = 0;
 
@@ -242,13 +252,11 @@ export class MemoryManager {
       const existing = this.memory.technicalDecisions.find(
         (entry) =>
           entry.status === "active" &&
-          normalizeText(entry.category ?? "") === normalizeText(category),
+          canonicalCategory(entry.category ?? "") === canonicalCategory(category),
       );
 
       if (existing) {
-        const sameValue =
-          normalizeText(existing.value ?? existing.content) ===
-          normalizeText(value);
+        const sameValue = looksLikeDuplicate(existing.value ?? existing.content, value);
         if (sameValue || isDuplicate(this.memory.technicalDecisions, content)) {
           this.stats.duplicatesRejected += 1;
           this.memory.technicalDecisions.push(
@@ -267,33 +275,21 @@ export class MemoryManager {
           continue;
         }
 
-        conflictCount += 1;
-        this.stats.conflictsDetected += 1;
-        const flagged = makeEntry(content, agentName, {
+        const versionBefore = this.memory.version;
+        const verdict = await evaluateConflict({
+          memory: this.memory,
           category,
-          value,
-          status: "flagged-conflict",
+          existing: {
+            category: existing.category ?? category,
+            value: existing.value ?? existing.content,
+          },
+          proposed: decision,
         });
-        this.memory.technicalDecisions.push(flagged);
-        this.memory.conflicts.push(
-          makeEntry(
-            `Preserved existing ${category}="${existing.value}" from ${existing.source}; flagged incompatible proposal ${value} from ${agentName}`,
-            "Memory Manager",
-            { category, value, status: "flagged-conflict" },
-          ),
-        );
-        log(
-          this.memory,
-          agentName,
-          "conflict",
-          `Detected 1 conflict on ${category}`,
-        );
-        log(
-          this.memory,
-          "Memory Manager",
-          "preserve",
-          `Preserved existing decision ${category}=${existing.value}`,
-        );
+        if (verdict.conflictDetected) {
+          conflictCount += 1;
+          this.stats.conflictsDetected += 1;
+        }
+        this.applyGuardianVerdict(agentName, existing, decision, content, verdict, versionBefore);
         continue;
       }
 
@@ -305,6 +301,104 @@ export class MemoryManager {
     }
 
     return { addedCount, conflictCount };
+  }
+
+  applyGuardianVerdict(
+    agentName: AgentName,
+    existing: MemoryEntry,
+    proposed: TechDecision,
+    content: string,
+    verdict: GuardianVerdict,
+    versionBefore: number,
+  ): void {
+    const category = proposed.category.trim();
+    const value = proposed.value.trim();
+
+    if (!verdict.conflictDetected) {
+      this.memory.technicalDecisions.push(
+        makeEntry(content, agentName, { category, value }),
+      );
+      this.stats.newEntries += 1;
+      this.recordGuardian(agentName, category, verdict, versionBefore, {
+        action: "compatible",
+        detail: `Guardian treated ${value} as complementary to ${existing.value}: ${verdict.reason}`,
+      });
+      return;
+    }
+
+    if (verdict.resolution === "accept_new") {
+      existing.status = "superseded";
+      this.memory.technicalDecisions.push(
+        makeEntry(content, agentName, { category, value, status: "active" }),
+      );
+      this.stats.newEntries += 1;
+      this.stats.conflictsResolved += 1;
+      this.recordGuardian(agentName, category, verdict, versionBefore, {
+        action: "accept",
+        detail: `Guardian accepted ${value} over ${existing.value}: ${verdict.reason}`,
+      });
+      return;
+    }
+
+    if (verdict.resolution === "keep_existing") {
+      this.memory.technicalDecisions.push(
+        makeEntry(content, agentName, {
+          category,
+          value,
+          status: "rejected-guardian",
+        }),
+      );
+      this.stats.conflictsResolved += 1;
+      this.recordGuardian(agentName, category, verdict, versionBefore, {
+        action: "preserve",
+        detail: `Guardian kept ${existing.value} and rejected ${value}: ${verdict.reason}`,
+      });
+      return;
+    }
+
+    this.memory.technicalDecisions.push(
+      makeEntry(content, agentName, {
+        category,
+        value,
+        status: "flagged-conflict",
+      }),
+    );
+    this.memory.conflicts.push(
+      makeEntry(
+        `Review needed: ${existing.category}="${existing.value}" vs proposed ${value} from ${agentName}. ${verdict.reason}`,
+        "Memory Guardian",
+        { category, value, status: "flagged-conflict" },
+      ),
+    );
+    this.stats.conflictsFlagged += 1;
+    this.recordGuardian(agentName, category, verdict, versionBefore, {
+      action: "flag",
+      detail: `Guardian flagged ${category} conflict for review: ${verdict.reason}`,
+    });
+  }
+
+  recordGuardian(
+    agentName: AgentName,
+    category: string,
+    verdict: GuardianVerdict,
+    versionBefore: number,
+    event: { action: string; detail: string },
+  ): void {
+    const versionAfter = versionBefore + 1;
+    const record: GuardianRecord = {
+      id: newId("grd"),
+      timestamp: now(),
+      proposingAgent: agentName,
+      category,
+      versionBefore,
+      versionAfter,
+      ...verdict,
+    };
+    this.memory.guardianHistory.push(record);
+    log(this.memory, "Memory Guardian", event.action, event.detail);
+    if (verdict.conflictDetected) {
+      log(this.memory, agentName, "conflict", `Detected 1 conflict on ${category}`);
+    }
   }
 
   getMemoryHistory(): MemoryActivity[] {
@@ -330,7 +424,9 @@ export async function saveMemoryAtomic(memory: SharedMemory): Promise<void> {
 export async function loadMemory(runId: string): Promise<SharedMemory> {
   const file = path.join(runDir(runId), "memory.json");
   const raw = await readFile(file, "utf8");
-  return JSON.parse(raw) as SharedMemory;
+  const memory = JSON.parse(raw) as SharedMemory;
+  if (!memory.guardianHistory) memory.guardianHistory = [];
+  return memory;
 }
 
 export async function saveRunResult(runId: string, payload: unknown): Promise<void> {

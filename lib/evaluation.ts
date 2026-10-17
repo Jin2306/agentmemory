@@ -1,8 +1,10 @@
+import { guardianMetricsFromMemory } from "./memoryGuardian";
 import { normalizeText } from "./memory";
 import type {
   AgentOutput,
   FinalPlan,
   Metrics,
+  SharedMemory,
   TechDecision,
 } from "./types";
 
@@ -165,7 +167,15 @@ export function evaluateWorkflow(
     requirementCoverage: coverage.ratio,
     requirementsCovered: coverage.covered,
     requirementsTotal: coverage.total,
+    guardianConflictsDetected: 0,
+    guardianConflictsResolved: 0,
+    guardianUnresolved: 0,
+    memoryConsistency: null,
   };
+}
+
+export function attachGuardianMetrics(metrics: Metrics, memory: SharedMemory): Metrics {
+  return { ...metrics, ...guardianMetricsFromMemory(memory) };
 }
 
 export function buildComparisonSummary(

@@ -1,6 +1,7 @@
 import { projectTitleFrom, runAgent, updatesFromParsed } from "./agents";
 import { isCrusoeConfigured, missingConfigMessage } from "./crusoe";
 import {
+  attachGuardianMetrics,
   buildComparisonSummary,
   buildFinalPlan,
   evaluateWorkflow,
@@ -88,14 +89,17 @@ export async function executeAgentTeam(
     emit({ type: "agent-result", mode: "with-memory", agent: output });
 
     if (output.parsed) {
-      manager.updateMemory(agent.name, updatesFromParsed(output.parsed));
+      await manager.updateMemory(agent.name, updatesFromParsed(output.parsed));
       await saveMemoryAtomic(manager.memory);
       emit({ type: "memory", memory: manager.memory, stats: manager.stats });
     }
   }
 
   const withoutMetrics = evaluateWorkflow(withoutAgents, reference);
-  const withMetrics = evaluateWorkflow(withAgents, reference);
+  const withMetrics = attachGuardianMetrics(
+    evaluateWorkflow(withAgents, reference),
+    manager.memory,
+  );
   const result: RunResult = {
     runId,
     request: trimmed,

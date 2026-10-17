@@ -4,11 +4,11 @@ import { countConflictingDecisions, countDuplicateFindings } from "../lib/evalua
 const mgr = new MemoryManager(createEmptyMemory("run-test", "Clinic", "Build a clinic booking app"));
 mgr.readMemory();
 mgr.selectRelevantKnowledge();
-mgr.updateMemory("Research Agent", {
+await mgr.updateMemory("Research Agent", {
   requirements: ["Patients can book appointments", "Doctors manage availability"],
   technicalDecisions: [{ category: "frontend", value: "Next.js", rationale: "SSR" }],
 });
-mgr.updateMemory("Design Agent", {
+await mgr.updateMemory("Design Agent", {
   requirements: ["Patients can book appointments"],
   technicalDecisions: [{ category: "frontend", value: "Vue", rationale: "SPA" }],
 });

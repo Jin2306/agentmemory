@@ -2,12 +2,19 @@ export type AgentId = "research" | "design" | "development";
 export type AgentName = "Research Agent" | "Design Agent" | "Development Agent";
 export type WorkflowMode = "without-memory" | "with-memory";
 export type AgentStatus = "waiting" | "running" | "completed" | "failed";
-export type EntryStatus = "active" | "flagged-conflict" | "rejected-duplicate";
+export type EntryStatus =
+  | "active"
+  | "flagged-conflict"
+  | "rejected-duplicate"
+  | "rejected-guardian"
+  | "superseded";
+export type GuardianResolution = "keep_existing" | "accept_new" | "flag_for_review";
+export type GuardianConfidence = "low" | "medium" | "high";
 
 export type MemoryEntry = {
   id: string;
   content: string;
-  source: AgentName | "Memory Manager";
+  source: AgentName | "Memory Manager" | "Memory Guardian";
   timestamp: string;
   status: EntryStatus;
   category?: string;
@@ -35,6 +42,7 @@ export type SharedMemory = {
   openQuestions: MemoryEntry[];
   conflicts: MemoryEntry[];
   activityLog: MemoryActivity[];
+  guardianHistory: GuardianRecord[];
 };
 
 export type MemoryStats = {
@@ -43,6 +51,26 @@ export type MemoryStats = {
   newEntries: number;
   duplicatesRejected: number;
   conflictsDetected: number;
+  conflictsResolved: number;
+  conflictsFlagged: number;
+};
+
+export type GuardianVerdict = {
+  conflictDetected: boolean;
+  existingDecision: string;
+  proposedDecision: string;
+  resolution: GuardianResolution;
+  reason: string;
+  confidence: GuardianConfidence;
+};
+
+export type GuardianRecord = GuardianVerdict & {
+  id: string;
+  timestamp: string;
+  proposingAgent: AgentName | "Memory Guardian";
+  category: string;
+  versionBefore: number;
+  versionAfter: number;
 };
 
 export type TokenUsage = {
@@ -124,6 +152,10 @@ export type Metrics = {
   requirementCoverage: number;
   requirementsCovered: number;
   requirementsTotal: number;
+  guardianConflictsDetected: number;
+  guardianConflictsResolved: number;
+  guardianUnresolved: number;
+  memoryConsistency: number | null;
 };
 
 export type FinalPlan = {
@@ -161,6 +193,30 @@ export type RunEvent =
   | { type: "memory"; memory: SharedMemory; stats: MemoryStats }
   | { type: "complete"; result: RunResult }
   | { type: "error"; message: string };
+
+export type GuardianDemoCaseResult = {
+  name: string;
+  description: string;
+  beforeVersion: number;
+  afterVersion: number;
+  activeDecisions: { category: string; value: string }[];
+};
+
+export type GuardianDemoResult = {
+  runId: string;
+  isolated: true;
+  request: string;
+  cases: GuardianDemoCaseResult[];
+  memory: SharedMemory;
+  stats: MemoryStats;
+  metrics: Pick<
+    Metrics,
+    | "guardianConflictsDetected"
+    | "guardianConflictsResolved"
+    | "guardianUnresolved"
+    | "memoryConsistency"
+  >;
+};
 
 export const AGENT_ORDER: { id: AgentId; name: AgentName }[] = [
   { id: "research", name: "Research Agent" },

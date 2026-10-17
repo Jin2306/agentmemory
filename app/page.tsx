@@ -1,16 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Play, Sparkles } from "lucide-react";
+import { Loader2, Play, Shield, Sparkles } from "lucide-react";
 import { AgentCard } from "@/components/AgentCard";
 import { ComparisonDashboard } from "@/components/ComparisonDashboard";
 import { FinalPlan } from "@/components/FinalPlan";
+import { MemoryGuardianPanel } from "@/components/MemoryGuardian";
 import { MemoryTimeline } from "@/components/MemoryTimeline";
 import { MemoryViewer } from "@/components/MemoryViewer";
 import type {
   AgentId,
   AgentOutput,
   AgentStatus,
+  GuardianDemoResult,
   MemoryStats,
   RunEvent,
   RunResult,
@@ -61,6 +63,9 @@ export default function Home() {
   const [stats, setStats] = useState<MemoryStats | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
+  const [guardianTesting, setGuardianTesting] = useState(false);
+  const [guardianDemo, setGuardianDemo] = useState<GuardianDemoResult | null>(null);
+  const [guardianError, setGuardianError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/health")
@@ -157,6 +162,27 @@ export default function Home() {
     }
   };
 
+  const testGuardian = async () => {
+    setGuardianTesting(true);
+    setGuardianError(null);
+    try {
+      const response = await fetch("/api/guardian/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error ?? `Guardian test failed (${response.status})`);
+      }
+      setGuardianDemo(data as GuardianDemoResult);
+    } catch (err) {
+      setGuardianError(err instanceof Error ? err.message : "Guardian test failed.");
+    } finally {
+      setGuardianTesting(false);
+    }
+  };
+
   const timeline = useMemo(() => memory?.activityLog ?? [], [memory]);
 
   return (
@@ -203,19 +229,36 @@ export default function Home() {
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          onClick={runTeam}
-          disabled={running}
-          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-sky-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-900/40 disabled:opacity-60"
-        >
-          {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-          {running ? "Running agent team…" : "Run Agent Team"}
-        </button>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={runTeam}
+            disabled={running || guardianTesting}
+            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-sky-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-900/40 disabled:opacity-60"
+          >
+            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {running ? "Running agent team…" : "Run Agent Team"}
+          </button>
+          <button
+            type="button"
+            onClick={testGuardian}
+            disabled={running || guardianTesting}
+            className="inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-5 py-2.5 text-sm font-semibold text-amber-100 disabled:opacity-60"
+          >
+            {guardianTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
+            {guardianTesting ? "Testing Guardian…" : "Test Memory Guardian"}
+          </button>
+        </div>
         {runId ? (
           <p className="mt-2 text-xs text-slate-500">Run ID: {runId}</p>
         ) : null}
         {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
+        {guardianError ? <p className="mt-3 text-sm text-rose-300">{guardianError}</p> : null}
+        {guardianDemo ? (
+          <p className="mt-2 text-xs text-slate-500">
+            Isolated Guardian demo {guardianDemo.runId} — project memory was not overwritten.
+          </p>
+        ) : null}
       </section>
 
       <section>
@@ -259,6 +302,30 @@ export default function Home() {
       </section>
 
       <MemoryViewer memory={memory} stats={stats} />
+      <MemoryGuardianPanel
+        history={
+          (memory?.guardianHistory?.length
+            ? memory.guardianHistory
+            : guardianDemo?.memory.guardianHistory) ?? []
+        }
+        stats={memory ? stats : guardianDemo?.stats ?? stats}
+      />
+      {guardianDemo ? (
+        <section className="rounded-2xl border border-amber-400/20 bg-slate-900/70 p-5">
+          <h2 className="mb-3 text-lg font-semibold text-white">Guardian test run</h2>
+          <ol className="space-y-2 text-sm text-slate-300">
+            {guardianDemo.cases.map((item) => (
+              <li key={item.name}>
+                <span className="font-medium text-amber-200">{item.name}:</span> {item.description}
+                <div className="text-xs text-slate-500">
+                  v{item.beforeVersion}→v{item.afterVersion} · active:{" "}
+                  {item.activeDecisions.map((d) => `${d.category}=${d.value}`).join(", ") || "none"}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
       <MemoryTimeline events={timeline} />
       <ComparisonDashboard
         without={result?.withoutMemory.metrics ?? null}

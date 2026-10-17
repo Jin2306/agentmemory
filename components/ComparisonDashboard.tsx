@@ -12,6 +12,11 @@ function formatCoverage(metrics: Metrics) {
   return `${Math.round(metrics.requirementCoverage * 100)}% (${metrics.requirementsCovered}/${metrics.requirementsTotal})`;
 }
 
+function formatConsistency(value: number | null) {
+  if (value == null) return "n/a";
+  return `${Math.round(value * 100)}%`;
+}
+
 function barWidth(a: number, b: number) {
   const max = Math.max(a, b, 1);
   return `${Math.round((a / max) * 100)}%`;
@@ -130,6 +135,26 @@ export function ComparisonDashboard({
                   <td className="py-2">Requirement coverage</td>
                   <td>{formatCoverage(without)}</td>
                   <td>{formatCoverage(withMemory)}</td>
+                </tr>
+                <tr className="border-t border-white/5">
+                  <td className="py-2">Conflicts detected</td>
+                  <td>{without.guardianConflictsDetected}</td>
+                  <td>{withMemory.guardianConflictsDetected}</td>
+                </tr>
+                <tr className="border-t border-white/5">
+                  <td className="py-2">Conflicts resolved</td>
+                  <td>{without.guardianConflictsResolved}</td>
+                  <td>{withMemory.guardianConflictsResolved}</td>
+                </tr>
+                <tr className="border-t border-white/5">
+                  <td className="py-2">Unresolved conflicts</td>
+                  <td>{without.guardianUnresolved}</td>
+                  <td>{withMemory.guardianUnresolved}</td>
+                </tr>
+                <tr className="border-t border-white/5">
+                  <td className="py-2">Active memory consistency</td>
+                  <td>{formatConsistency(without.memoryConsistency)}</td>
+                  <td>{formatConsistency(withMemory.memoryConsistency)}</td>
                 </tr>
               </tbody>
             </table>
